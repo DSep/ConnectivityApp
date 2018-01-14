@@ -1,5 +1,9 @@
 package com.nwhacks.spo;
 
+import android.content.Context;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
 import android.os.Bundle;
 import android.support.v4.content.ContextCompat;
 import android.support.v7.app.AppCompatActivity;
@@ -10,10 +14,12 @@ import android.widget.ListView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import java.nio.ByteBuffer;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.Random;
 
 import io.left.rightmesh.android.AndroidMeshManager;
 import io.left.rightmesh.android.MeshService.ServiceDisconnectedException;
@@ -60,6 +66,7 @@ public class MainActivity extends AppCompatActivity implements MeshStateListener
     // List and adapter tracking sent pings and whether or not they have been echoed.
     ArrayList<String> pingsList = new ArrayList<>();
     ArrayAdapter<String> pingsListAdapter = null;
+    ArrayList<LatLon> locns = new ArrayList<>();
 
 
     //
@@ -149,6 +156,34 @@ public class MainActivity extends AppCompatActivity implements MeshStateListener
     private void sendPing(View view) {
         DateFormat df = new SimpleDateFormat("MMM dd kk:mm:ss:SSSS");
 
+
+
+        LocationManager locationManager = (LocationManager)
+                getSystemService(Context.LOCATION_SERVICE);
+
+        MyLocationListener locationListener = new MyLocationListener();
+
+        try {
+            locationManager.requestLocationUpdates(
+                    LocationManager.GPS_PROVIDER, 5000, 10, locationListener);
+        } catch (SecurityException e) {
+            e.printStackTrace();
+        } catch (NullPointerException e) {
+            e.printStackTrace();
+        }
+        double lat = locationListener.getLatitude();
+        double lon = locationListener.getLongitude();
+        byte[] latitude = toByteArray(lat);
+        byte[] longitude = toByteArray(lon);
+        byte[] locationArray = new byte[16];
+        for (int i = 0; i < 16; i++) {
+            if (i < 8) {
+                locationArray[i] = latitude[i];
+            } else {
+                locationArray[i] = longitude[i - 8];
+            }
+        }
+
         // Null check, as recipientID has no default value.
         if (recipientID != null) {
             // Ping content is just the current time, so they are unique and give us some rough
@@ -158,7 +193,7 @@ public class MainActivity extends AppCompatActivity implements MeshStateListener
 
             try {
                 // Attempt to ping the currently selected recipient.
-                mm.sendDataReliable(recipientID, 4321, payload.getBytes());
+                mm.sendDataReliable(recipientID, 4321, locationArray);
 
                 // Log the ping if sent successfully.
                 pingsList.add(0, timestamp);
@@ -236,34 +271,45 @@ public class MainActivity extends AppCompatActivity implements MeshStateListener
     private void receiveData(RightMeshEvent rme) {
         // Parse data from event.
         DataReceivedEvent dre = (DataReceivedEvent) rme;
-        String dataString = new String(dre.data);
-        char echoBit = dataString.charAt(0); // `1` for initial requests, `0` for echoed requests.
-        String timestamp = dataString.substring(1);
+        double lat = getLatitude(dre.data);
+        double lon = getLongitude(dre.data);
+//        String dataString = new String(dre.data);
+//        char echoBit = dataString.charAt(0); // `1` for initial requests, `0` for echoed requests.
+//        String timestamp = dataString.substring(1);
 
-        if (echoBit == '1') {
+       // if (echoBit == '1') {
             // Echo messages starting with '1'.
-            String responsePayload = "0" + dataString.substring(1);
-            try {
-                mm.sendDataReliable(dre.peerUuid, 4321, responsePayload.getBytes());
-                pingsList.add(0, "Echoed ping. (" + shortenMeshID(rme.peerUuid) + ")");
-            } catch (ServiceDisconnectedException sde) {
-                Log.e(TAG, "Service disconnected before ping could be returned, with message: "
-                        + sde.getMessage());
-            } catch (RightMeshException rmx) {
-                Log.e(TAG, "Error occurred sending ping, with message: " + rmx.getMessage());
-            }
-        } else if (echoBit == '0') {
-            // Messages starting with '0' have already been echoed - update log.
-            if (pingsList.contains(timestamp)) {
-                pingsList.set(pingsList.indexOf(timestamp),
-                        timestamp + " - Received! (" + shortenMeshID(rme.peerUuid) + ")");
-            }
-        }
+
+//            String responsePayload = "0" + dataString.substring(1);
+//            try {
+//                mm.sendDataReliable(dre.peerUuid, 4321, responsePayload.getBytes());
+                pingsList.add(0, "Echoed ping. (" + shortenMeshID(rme.peerUuid) + ")" + "Lot: " + lat + "Lon" + lon);
+                if (!locns.contains(new LatLon(lat, lon))) {
+                    locns.add(new LatLon(lat, lon));
+                }
+
+
+//            } catch (ServiceDisconnectedException sde) {
+//                Log.e(TAG, "Service disconnected before ping could be returned, with message: "
+//                        + sde.getMessage());
+//            } catch (RightMeshException rmx) {
+//                Log.e(TAG, "Error occurred sending ping, with message: " + rmx.getMessage());
+//            }
+
+        //}
+//       // else if (echoBit == '0') {
+//            // Messages starting with '0' have already been echoed - update log.
+//            if (pingsList.contains(timestamp)) {
+//                pingsList.set(pingsList.indexOf(timestamp),
+//                        timestamp + " - Received! (" + shortenMeshID(rme.peerUuid) + ")");
+//            }
+//       // }
 
         // Null-check the adapter, as events may fire when the activity doesn't exist.
         if (pingsListAdapter != null) {
             runOnUiThread(() -> pingsListAdapter.notifyDataSetChanged());
         }
+
     }
 
     /**
@@ -298,4 +344,31 @@ public class MainActivity extends AppCompatActivity implements MeshStateListener
                     .setTextColor(ContextCompat.getColor(MainActivity.this, colour)));
         }
     }
+
+    private static byte[] toByteArray(double value) {
+        byte[] bytes = new byte[8];
+        ByteBuffer.wrap(bytes).putDouble(value);
+        return bytes;
+    }
+
+    private static double toDouble(byte[] bytes) {
+        return ByteBuffer.wrap(bytes).getDouble();
+    }
+    private double getLatitude(byte[] data) {
+        byte[] lat = new byte[8];
+        for (int i = 0; i < 8; i++) {
+            lat[i] = data[i];
+        }
+        return toDouble(lat);
+    }
+
+    private double getLongitude(byte[] data) {
+        byte[] lon = new byte[8];
+        for (int i = 8; i < 16; i++) {
+            lon[i - 8] = data[i];
+        }
+        return toDouble(lon);
+    }
+
+
 }
